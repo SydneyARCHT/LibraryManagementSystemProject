@@ -1,6 +1,9 @@
 from book import Book
 from author import Author
 from users import User
+from connect_mysql import connect_db
+from mysql.connector import Error
+
 class Library:    
     def __init__(self):
         self.books = []
@@ -12,149 +15,319 @@ class Library:
 # BOOK FUNCTIONS
 
     def add_book(self): 
-            title = input("Please enter the book's title: ")
-            genre = input("Please enter the genre of the book: ")
-            publication_date = input("Please enter the date the book was published: ")
-            print("Let's get some author details! ")
-            author_name = input("Please enter the author's name: ")
-            author_bday = input("Please enter the author's birthday: ")
-            author_bio = input("Please enter the author's biography: ")
-            author = Author(author_name, author_bday, author_bio)
-            self.authors.append(author)  
-            book = Book(title, author, genre, publication_date)
-            self.books.append(book)
-            print()
-            print(f"{title} by {author_name} was added to the library!")
-            print()
+            try:
+                conn = connect_db()
+                cursor = conn.cursor()
+
+                title = input("Please enter the book's title: ")
+                genre = input("Please enter the genre of the book: ")
+                publication_date = input("Please enter the date the book was published: ")
+                print("Let's get some author details! ")
+                author_name = input("Please enter the author's name: ")
+                author_bday = input("Please enter the author's birthday: ")
+                biography = input("Please enter the author's biography: ")
+
+                author_query = "INSERT INTO authors (name, bday, biography) VALUES (%s, %s, %s)"
+                author_data = (author_name, author_bday, biography)
+                cursor.execute(author_query, author_data)
+
+                book_query = "INSERT INTO books (title, genre, publication_date) VALUES (%s, %s, %s)"
+                book_data = (title, genre, publication_date,)
+                cursor.execute(book_query, book_data)
+                conn.commit() 
+                print()
+                print(f"{title} by {author_name} was added to the library!")
+                print()
+            except Error as e:
+                print(f"Error: {e}")
+
+            finally:
+                if conn and conn.is_connected():
+                    cursor.close()   
+
 
     def find_book(self, title):
         try:
-            for book in self.books:
-                if book.get_title() == title:
-                    print("Book found, here is some info: ")
-                    print(f"{book.get_title()}")
-                    print(f"  - {book.get_author().get_author_name()}")
-                    print(f"  - {book.get_genre()}")
-                    print(f"  - {book.get_publication_date()}")
-                    print(f"  - {book.get_availability()}")
-                    return book
-        except:
-            print("Sorry! That book is not in our library. ")
-            print()
-    
+            conn = connect_db()
+            cursor = conn.cursor()
+
+            query = """
+                SELECT b.title, b.genre, b.publication_date, b.availability, a.name
+                FROM books b
+                JOIN authors a ON b.author_id = a.id
+                WHERE b.title = %s
+            """
+            cursor.execute(query, (title,))
+            book = cursor.fetchone()
+            if book:
+                print("Book found, here is some info: ")
+                print(f"Title: {book[0]}")
+                print(f"  - Author: {book[4]}")
+                print(f"  - Genre: {book[1]}")
+                print(f"  - Publication Date: {book[2]}")
+                print(f"  - Availability: {book[3]}")
+                return book
+            else:
+                print("Sorry! That book is not in our library.")
+                print()
+                return None
+        except Error as e:
+            print(f"Error: {e}")
+            return None
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()
+                conn.close()
+
     def display_books(self):
-        for book in self.books:
-            print("Book Details: ")
-            print(f"{book.get_title()}")
-            print(f"  - {book.get_author().get_author_name()}")
-            print(f"  - {book.get_genre()}")
-            print(f"  - {book.get_publication_date()}")
-            print(f"  - {book.get_availability()}")
-            print()
+        try:
+            conn = connect_db()
+            cursor = conn.cursor()
+            query = """
+                SELECT b.title, b.genre, b.publication_date, b.availability, a.name
+                FROM books b
+                JOIN authors a ON b.author_id = a.id
+            """
+            cursor.execute(query)
+            books = cursor.fetchall()
+            if books:
+                for book in books:
+                    print("Book Details: ")
+                    print(f"Title: {book[0]}")
+                    print(f"  - Author: {book[4]}")
+                    print(f"  - Genre: {book[1]}")
+                    print(f"  - Publication Date: {book[2]}")
+                    print(f"  - Availability: {book[3]}")
+                    print()
+            else:
+                print("No books found.")
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()
+                conn.close()
 
 
     def lend_book(self):
         title = input("Which book would you like to borrow? ")
         user_id = int(input("Please enter Library ID: "))
-        self.current_user = None
-        self.current_book = None
-        for users in self.users:
-            if user_id == users.get_library_id():
-                self.current_user = users
-        for book in self.books:
-            if title == book.get_title():
-                self.current_book = book
-        if self.current_user and self.current_book:
-            if book.get_availability() == "Available":
-                self.current_user.borrow_book(self.current_book)
-                self.current_book.borrow_book()
-                print(f"{title} has been rented out by {self.current_user.get_name()}")
+        
+        try:
+            conn = connect_db()
+            cursor = conn.cursor()
+
+            user_query = "SELECT * FROM users WHERE library_id = %s"
+            cursor.execute(user_query, (user_id,))
+            user = cursor.fetchone()
+
+            if not user:
+                print("User not found.")
+                return
+            book_query = "SELECT * FROM books WHERE title = %s"
+            cursor.execute(book_query, (title,))
+            book = cursor.fetchone()
+            if not book:
+                print("Book not found.")
+                return
+            if book[4] == "Available":
+                update_query = "UPDATE books SET availability = 'Borrowed' WHERE id = %s"
+                cursor.execute(update_query, (book[0],))
+                lending_query = "INSERT INTO lendings (user_id, book_id) VALUES (%s, %s)"
+                cursor.execute(lending_query, (user[0], book[0]))
+
+                conn.commit()
+                print(f"{title} has been rented out by {user[1]}")
             else:
-                print(f"Book '{book.get_title()}' is not available for borrowing.")
-        else:
-            print(f"Book '{title}' is not in our library.")
+                print(f"Book '{title}' is not available for borrowing.")
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def return_book(self):
         title = input("Which book would you like to return? ")
-        book = self.find_book(title)
-        if book:
-            if book.get_availability() == "Borrowed":
-                book.set_availability()
-                for user in self.users:
-                    for book in user.borrowed_books:
-                        if title == book.get_title():
-                            user.borrowed_books.remove(book)
-                    print(user.borrowed_books)
-                print(f"Book '{book.get_title()}' has been returned.")
+        try:
+            conn = connect_db()
+            cursor = conn.cursor()
+            book_query = "SELECT * FROM books WHERE title = %s"
+            cursor.execute(book_query, (title,))
+            book = cursor.fetchone()
+            if not book:
+                print("Book not found.")
+                return
+
+            if book[4] == "Borrowed":
+                update_query = "UPDATE books SET availability = 'Available' WHERE id = %s"
+                cursor.execute(update_query, (book[0],))
+                delete_query = "DELETE FROM lendings WHERE book_id = %s"
+                cursor.execute(delete_query, (book[0],))
+
+                conn.commit()
+                print(f"Book '{title}' has been returned.")
             else:
-                print(f"Book '{book.get_title()}' is not borrowed.")
-        else:
-            print(f"Book '{title}' is not in our library.")
+                print(f"Book '{title}' is not borrowed.")
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()
+                conn.close()
 
 #----------------------------------------------------------------------------------------------------------
 # USER FUNCTIONS         
     
     def add_user(self):
-        name = input("Please enter new user name: ")
-        email = input("Please enter a new email: ")
-        library_id = int(input("Please enter a new library ID: "))
-        user = User(name, email, library_id)
-        self.users.append(user)
-        print(f"{name} has been added with library ID {library_id}")
-        print()
+        try:
+            conn = connect_db()
+            cursor = conn.cursor()
+
+            name = input("Please enter new user name: ")
+            email = input("Please enter a new email: ")
+            library_id = int(input("Please enter a new library ID: "))
+            query = "INSERT INTO users (name, email, library_id) VALUES (%s, %s, %s)"
+            user_data = (name, email, library_id)
+            cursor.execute(query, user_data)
+            conn.commit() 
+            print(f"{name} has been added with library ID {library_id}")
+            print()
+        except Error as e:
+            print(f"Error: {e}")
+
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()   
 
     def find_user(self):
         name = input("Who is the user you are looking for? ")
         try:
-            for user in self.users:
-                if user.get_name() == name:
-                    print("User found, here is some info: ")
-                    print(f"{user.get_name()}")
-                    print(f"-  Email: {user.get_email()}")
-                    print(f"-  Library ID: {user.get_library_id()}")
-                    print(f"-  Borrored Books: {', '.join(user.borrowed_books)}" if user.borrowed_books else "-  No Books Borrowed")
-                    return user
-        except:
-            print("Error has occured, please enter a valid user... ")
+            conn = connect_db()
+            cursor = conn.cursor()
 
-    def display_users(self):
-        for user in self.users:
-            print("User found, here is some info: ")
-            print(f"{user.get_name()}")
-            print(f"-  Email: {user.get_email()}")
-            print(f"-  Library ID: {user.get_library_id()}")
-            print(f"-  Borrored Books: {', '.join(user.borrowed_books)}" if user.borrowed_books else "-  No Books Borrowed")
+            query = "SELECT * FROM users WHERE name = %s"
+            cursor.execute(query, (name,))
+            user = cursor.fetchone()
+            if user:
+                print("User found, here is some info:")
+                print(f"Name: {user[1]}")
+                print(f"- Email: {user[2]}")
+                print(f"- Library ID: {user[3]}")
+            print(f"User '{name}' not found.")
+            return None
+        except Error as e:
+            print(f"Error occurred: {e}")
+            return None
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()
+                conn.close()
+
+def display_users(self):
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+
+        query = "SELECT * FROM users"
+        cursor.execute(query)
+        users = cursor.fetchall()
+
+        if users:
+            for user in users:
+                print("User found, here is some info:")
+                print(f"Name: {user[1]}")
+                print(f"- Email: {user[2]}")
+                print(f"- Library ID: {user[3]}")
+                print() 
+        else:
+            print("No users found.")
+
+    except Error as e:
+        print(f"Error occurred: {e}")
+    
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
 
 #----------------------------------------------------------------------------------------------------------
 # AUTHOR FUNCTIONS 
 
     def add_author(self):
-        name = input("Name of Author: ")
-        bday = input("Author Birthday: ")
-        bio = input("Author Bio: ")
-        author = Author(name, bday, bio)
-        self.authors.append(author)
+        try:
+            conn = connect_db()
+            cursor = conn.cursor()
+
+            author_name = input("Please enter the author's name: ")
+            author_bday = input("Please enter the author's birthday: ")
+            biography = input("Please enter the author's biography: ")
+
+            author_query = "INSERT INTO authors (name, bday, biography) VALUES (%s, %s, %s)"
+            author_data = (author_name, author_bday, biography)
+            cursor.execute(author_query, author_data)
+            conn.commit() 
+            print()
+            print(f"{author_name} was added to the author section")
+            print()
+        except Error as e:
+            print(f"Error: {e}")
+
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()   
+
+
 
     def find_author(self):
         name = input("Who is the author you are looking for? ")
         try:
-            for author in self.authors:
-                if author.get_author_name() == name:
-                    print(f"Author found: {author.get_author_name()}")
-                    print(f"- Birthday: {author.get_bday()}")
-                    print(f"- Biography: {author.get_bio()}")
-                    return author
-        except:
-            print("Error has occured, please enter a valid author... ")
+            conn = connect_db()
+            cursor = conn.cursor()
+
+            query = "SELECT * FROM authors WHERE name = %s"
+            cursor.execute(query, (name,))
+            author = cursor.fetchone() 
+            if author:
+                print(f"Author found: {author[1]}")
+                print(f"- Birthday: {author[2]}")
+                print(f"- Biography: {author[3]}")
+                return author
+            else:
+                print(f"Author '{name}' not found.")
+                return None
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            return None
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()
+                conn.close()
 
 
     def view_authors(self):
-        for author in self.authors:
-            print(f"Author found: {author.get_author_name()}")
-            print(f"- Birthday: {author.get_bday()}")
-            print(f"- Biography: {author.get_bio()}")
+        try:
+            conn = connect_db()
+            cursor = conn.cursor()
+
+            query = "SELECT * FROM authors"
+            cursor.execute(query)
+            authors = cursor.fetchall()
+
+            if not authors:
+                print("No authors found.")
+            else:
+                for author in authors:
+                    print(f"Author: {author[1]}")
+                    print(f"- Birthday: {author[2]}")
+                    print(f"- Biography: {author[3]}")
+                    print()  
+        except Exception as e:
+            print(f"Error occurred: {e}")
+        finally:
+            if conn and conn.is_connected():
+                cursor.close()
+                conn.close()
 
 #----------------------------------------------------------------------------------------------------------
     
-
-# Lend and return are the only one that needs arguments???
